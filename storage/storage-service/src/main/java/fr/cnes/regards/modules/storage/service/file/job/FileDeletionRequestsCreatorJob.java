@@ -45,7 +45,7 @@ import fr.cnes.regards.modules.storage.service.file.request.FileDeletionRequestS
  * JOB to handle deletion requests on many {@link FileReference}s.<br>
  * This jobs requests database to retrieve {@link FileReference}s with search criterion and for each, send a {@link DeletionFlowItem} event.<br>
  * Events can be handled by the first available storage microservice to create associated {@link FileDeletionRequest}.<br>
- * NOTE : Be careful that the {@link this#run()} stays not transactional.
+ * NOTE : Be careful that the {@link #run()} stays not transactional.
  *
  * @author Sébastien Binda
  *
@@ -82,7 +82,7 @@ public class FileDeletionRequestsCreatorJob extends AbstractJob<Void> {
         try {
             locked = fileDelReqService.lockDeletionProcess(true, 300);
             if (!locked) {
-                LOGGER.error("[DELETION JOB] Unable to get a lock for deletion process. Deletion job canceled");
+                logger.error("[DELETION JOB] Unable to get a lock for deletion process. Deletion job canceled");
                 return;
             }
             String storage = parameters.get(STORAGE_LOCATION_ID).getValue();
@@ -90,7 +90,7 @@ public class FileDeletionRequestsCreatorJob extends AbstractJob<Void> {
             Pageable pageRequest = PageRequest.of(0, DeletionFlowItem.MAX_REQUEST_PER_GROUP);
             Page<FileReference> pageResults;
             long start = System.currentTimeMillis();
-            LOGGER.info("[DELETION JOB] Calculate all files to delete for storage location {} (forceDelete={})",
+            logger.info("[DELETION JOB] Calculate all files to delete for storage location {} (forceDelete={})",
                         storage, forceDelete);
             String requestGroupId = String.format("DELETION-%s", UUID.randomUUID().toString());
             Set<FileDeletionRequestDTO> deletionRequests = Sets.newHashSet();
@@ -113,7 +113,7 @@ public class FileDeletionRequestsCreatorJob extends AbstractJob<Void> {
             if (!deletionRequests.isEmpty()) {
                 publisher.publish(DeletionFlowItem.build(deletionRequests, requestGroupId));
             }
-            LOGGER.info("[DELETION JOB] {} files to delete for storage location {} calculated in {}ms",
+            logger.info("[DELETION JOB] {} files to delete for storage location {} calculated in {}ms",
                         pageResults.getTotalElements(), storage, System.currentTimeMillis() - start);
         } finally {
             if (locked) {

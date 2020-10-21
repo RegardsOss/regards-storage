@@ -85,7 +85,7 @@ public class FileCacheRequestJob extends AbstractJob<Void> {
         long start = System.currentTimeMillis();
         // Initiate the job progress manager
         FileCacheJobProgressManager progressManager = new FileCacheJobProgressManager(fileCacheRequestService, this);
-        LOGGER.debug("[AVAILABILITY JOB] Runing availability job for {} cache requests", nbRequestToHandle);
+        logger.debug("[AVAILABILITY JOB] Runing availability job for {} cache requests", nbRequestToHandle);
         INearlineStorageLocation storagePlugin;
         String errorCause = null;
         try {
@@ -106,7 +106,7 @@ public class FileCacheRequestJob extends AbstractJob<Void> {
                                                                 fileRef.getMetaInfo().getChecksum(), errorCause));
                 }
             }
-            LOGGER.debug("[AVAILABILITY JOB] Availability job handled in {} ms for {} cache requests",
+            logger.debug("[AVAILABILITY JOB] Availability job handled in {} ms for {} cache requests",
                          System.currentTimeMillis() - start, nbRequestToHandle);
         }
     }

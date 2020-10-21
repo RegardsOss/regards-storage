@@ -46,7 +46,7 @@ public class CacheVerificationJob extends AbstractJob<Void> {
         try {
             cacheService.checkDiskDBCoherence();
         } catch (IOException e) {
-            LOGGER.error("Error during cache coherence verification. Cause : {}", e.getMessage());
+            logger.error("Error during cache coherence verification. Cause : {}", e.getMessage());
             throw new JobRuntimeException(e.getMessage(), e);
         }
     }

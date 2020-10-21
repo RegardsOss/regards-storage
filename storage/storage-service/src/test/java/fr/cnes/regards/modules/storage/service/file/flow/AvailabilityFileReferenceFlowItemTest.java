@@ -21,7 +21,9 @@ package fr.cnes.regards.modules.storage.service.file.flow;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -123,7 +125,9 @@ public class AvailabilityFileReferenceFlowItemTest extends AbstractStorageTest {
         Mockito.clearInvocations(publisher);
         String groupId = UUID.randomUUID().toString();
         AvailabilityFlowItem request = AvailabilityFlowItem.build(checksums, OffsetDateTime.now().plusDays(1), groupId);
-        handler.handleSync(new TenantWrapper<>(request, this.getDefaultTenant()));
+        List<AvailabilityFlowItem> items = new ArrayList<>();
+        items.add(request);
+        handler.handleBatch(getDefaultTenant(), items);
         runtimeTenantResolver.forceTenant(this.getDefaultTenant());
 
         // There should be 5 cache request for the 3 files only in near line and 2 files offline.
@@ -188,7 +192,9 @@ public class AvailabilityFileReferenceFlowItemTest extends AbstractStorageTest {
         AvailabilityFlowItem request = AvailabilityFlowItem.build(Sets.newHashSet(file1.getMetaInfo().getChecksum()),
                                                                   OffsetDateTime.now().plusDays(2),
                                                                   UUID.randomUUID().toString());
-        handler.handleSync(new TenantWrapper<>(request, this.getDefaultTenant()));
+        List<AvailabilityFlowItem> items = new ArrayList<>();
+        items.add(request);
+        handler.handleBatch(getDefaultTenant(), items);
         runtimeTenantResolver.forceTenant(this.getDefaultTenant());
 
         ArgumentCaptor<ISubscribable> argumentCaptor = ArgumentCaptor.forClass(ISubscribable.class);
@@ -220,7 +226,9 @@ public class AvailabilityFileReferenceFlowItemTest extends AbstractStorageTest {
 
         String groupId = UUID.randomUUID().toString();
         AvailabilityFlowItem request = AvailabilityFlowItem.build(checksums, OffsetDateTime.now().plusDays(1), groupId);
-        handler.handleSync(new TenantWrapper<>(request, this.getDefaultTenant()));
+        List<AvailabilityFlowItem> items = new ArrayList<>();
+        items.add(request);
+        handler.handleBatch(getDefaultTenant(), items);
         runtimeTenantResolver.forceTenant(this.getDefaultTenant());
 
         Assert.assertEquals("There should be 4 cache requests created", 4,
@@ -254,8 +262,7 @@ public class AvailabilityFileReferenceFlowItemTest extends AbstractStorageTest {
         Assert.assertEquals("There should be 1 files available", 1, availables.size());
         Assert.assertEquals("There should be 3 files error", 3, notAvailables.size());
 
-        retryHandler.handle(new TenantWrapper<RetryFlowItem>(RetryFlowItem.buildAvailabilityRetry(groupId),
-                getDefaultTenant()));
+        retryHandler.handle(TenantWrapper.build(RetryFlowItem.buildAvailabilityRetry(groupId), getDefaultTenant()));
 
         runtimeTenantResolver.forceTenant(this.getDefaultTenant());
         Assert.assertEquals("There should be 3 cache requests in TODO", 3,

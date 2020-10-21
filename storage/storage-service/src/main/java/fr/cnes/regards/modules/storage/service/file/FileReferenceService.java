@@ -26,6 +26,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
@@ -72,6 +73,11 @@ public class FileReferenceService {
         }
     }
 
+    public void keepTransaction() throws InterruptedException {
+        Page<FileReference> response = fileRefRepo.findAll(PageRequest.of(0, 1000));
+        Thread.sleep(10_000);
+    }
+
     /**
      * Creates a new {@link FileReference} with given parameters. this method does not handle physical files.
      * After success, an AMQP message {@link FileReferenceEvent} is sent with STORED state.
@@ -79,7 +85,6 @@ public class FileReferenceService {
      * @param owners new file owners
      * @param fileMetaInfo file information
      * @param location file location
-     * @param groupIds business request identifiers
      */
     public FileReference create(Collection<String> owners, FileReferenceMetaInfo fileMetaInfo, FileLocation location) {
         FileReference fileRef = new FileReference(owners, fileMetaInfo, location);
@@ -154,9 +159,6 @@ public class FileReferenceService {
 
     /**
      * Search for a {@link FileReference} associated to the given storage location and matching the given checksum.
-     * @param storage
-     * @param checksum
-     * @return
      */
     @Transactional(readOnly = true)
     public Optional<FileReference> search(String storage, String checksum) {
@@ -175,7 +177,6 @@ public class FileReferenceService {
 
     /**
      * Search for all {@link FileReference}s associated to the given checksum.
-     * @param checksums
      * @return {@link FileReference}s
      */
     @Transactional(readOnly = true)

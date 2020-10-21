@@ -28,8 +28,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import javax.persistence.EntityManager;
-
 import org.apache.commons.compress.utils.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -101,9 +99,6 @@ public class FileDeletionRequestService {
 
     @Autowired
     private StoragePluginConfigurationHandler storageHandler;
-
-    @Autowired
-    private EntityManager em;
 
     @Autowired
     protected FileDeletionRequestService self;
@@ -193,6 +188,7 @@ public class FileDeletionRequestService {
             Set<String> deletionToSchedule = (storages != null) && !storages.isEmpty()
                     ? allStorages.stream().filter(storages::contains).collect(Collectors.toSet())
                     : allStorages;
+            int loop = 0;
             for (String storage : deletionToSchedule) {
                 Page<FileDeletionRequest> deletionRequestPage;
                 Long maxId = 0L;
@@ -207,12 +203,11 @@ public class FileDeletionRequestService {
                                 .getId();
                         jobList.addAll(self.scheduleDeletionJobsByStorage(storage, deletionRequestPage));
                     }
-                } while (deletionRequestPage.hasContent());
+                    loop++;
+                } while (deletionRequestPage.hasContent() && (loop < 10));
             }
-            if (jobList.size() > 0) {
-                LOGGER.debug("[DELETION REQUESTS] {} jobs scheduled in {} ms", jobList.size(),
-                             System.currentTimeMillis() - start);
-            }
+            LOGGER.debug("[DELETION REQUESTS] {} jobs scheduled in {} ms", jobList.size(),
+                         System.currentTimeMillis() - start);
             return jobList;
         } finally {
             releaseLock();
@@ -229,7 +224,9 @@ public class FileDeletionRequestService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Collection<JobInfo> scheduleDeletionJobsByStorage(String storage,
             Page<FileDeletionRequest> deletionRequestPage) {
-        if (storageHandler.getConfiguredStorages().contains(storage)) {
+        LOGGER.debug("[DELETION REQUESTS] scheduling {} deletion jobs for storage {} ... ", deletionRequestPage.get(),
+                     storage);
+        if (storageHandler.isConfigured(storage)) {
             return scheduleDeletionJobsByStorage(storage, deletionRequestPage.getContent());
         } else {
             handleStorageNotAvailable(deletionRequestPage.getContent(), Optional.empty());
@@ -288,8 +285,6 @@ public class FileDeletionRequestService {
     /**
      * Schedule a {@link JobInfo} for the given {@link  FileDeletionWorkingSubset}.<br/>
      * NOTE : A new transaction is created for each call at this method. It is mandatory to avoid having too long transactions.
-     * @param workingSubset
-     * @param pluginConfId
      * @return {@link JobInfo} scheduled.
      */
     private JobInfo scheduleJob(FileDeletionWorkingSubset workingSubset, String pluginConfBusinessId) {
@@ -300,8 +295,6 @@ public class FileDeletionRequestService {
                 parameters, authResolver.getUser(), FileDeletionRequestJob.class.getName()));
         workingSubset.getFileDeletionRequests().forEach(fileRefReq -> fileDeletionRequestRepo
                 .updateStatusAndJobId(FileRequestStatus.PENDING, jobInfo.getId().toString(), fileRefReq.getId()));
-        em.flush();
-        em.clear();
         return jobInfo;
     }
 
@@ -424,7 +417,7 @@ public class FileDeletionRequestService {
         fileRefService.removeOwner(fileReference, owner, groupId);
         // If file reference does not belongs to anyone anymore, delete file reference
         if (fileReference.getOwners().isEmpty()) {
-            if (storageHandler.getConfiguredStorages().contains(fileReference.getLocation().getStorage())) {
+            if (storageHandler.isConfigured(fileReference.getLocation().getStorage())) {
                 // If the file is stored on an accessible storage, create a new deletion request
                 create(fileReference, forceDelete, groupId, existingRequests, FileRequestStatus.TO_DO);
             } else {

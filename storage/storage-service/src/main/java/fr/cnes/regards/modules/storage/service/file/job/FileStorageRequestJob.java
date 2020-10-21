@@ -27,6 +27,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 
@@ -52,6 +54,8 @@ import fr.cnes.regards.modules.storage.service.file.request.FileStorageRequestSe
  *
  */
 public class FileStorageRequestJob extends AbstractJob<Void> {
+
+    private static final Logger STATIC_LOGGER = LoggerFactory.getLogger(FileStorageRequestJob.class);
 
     /**
      * JOB Parameter key for the storage plugin configuration identifier to use for the storage.
@@ -93,7 +97,7 @@ public class FileStorageRequestJob extends AbstractJob<Void> {
         FileStorageJobProgressManager progressManager = new FileStorageJobProgressManager(fileStorageReqService, this);
 
         nbRequestToHandle = workingSubset.getFileReferenceRequests().size();
-        LOGGER.debug("[STORAGE JOB] Runing storage job for {} storage requests", nbRequestToHandle);
+        logger.debug("[STORAGE JOB] Runing storage job for {} storage requests", nbRequestToHandle);
         // Calculates if needed image dimensions
         workingSubset.getFileReferenceRequests().forEach(FileStorageRequestJob::calculateImageDimension);
 
@@ -118,7 +122,7 @@ public class FileStorageRequestJob extends AbstractJob<Void> {
                 }
             }
             progressManager.bulkSave();
-            LOGGER.info("[STORAGE JOB] storage job handled in {}ms for {} storage requests",
+            logger.info("[STORAGE JOB] storage job handled in {}ms for {} storage requests",
                         System.currentTimeMillis() - start, nbRequestToHandle);
         }
     }
@@ -146,13 +150,15 @@ public class FileStorageRequestJob extends AbstractJob<Void> {
                         fileRefRequest.getMetaInfo().setHeight(((Number) dimension.getHeight()).intValue());
                         fileRefRequest.getMetaInfo().setWidth(((Number) dimension.getWidth()).intValue());
                     } else {
-                        LOGGER.warn("Error calculating image file height/width. Cause : File {} is not accessible.",
-                                    fileRefRequest.getOriginUrl());
+                        STATIC_LOGGER
+                                .warn("Error calculating image file height/width. Cause : File {} is not accessible.",
+                                      fileRefRequest.getOriginUrl());
                     }
                 }
             }
         } catch (IOException | URISyntaxException e) {
-            LOGGER.warn(String.format("Error calculating image file height/width. Cause : %s", e.getMessage()), e);
+            STATIC_LOGGER.warn(String.format("Error calculating image file height/width. Cause : %s", e.getMessage()),
+                                e);
         }
     }
 

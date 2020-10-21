@@ -18,6 +18,8 @@
  */
 package fr.cnes.regards.modules.storage.service.location;
 
+import java.time.Instant;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,10 +29,14 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import fr.cnes.regards.framework.modules.locks.service.ILockService;
+import fr.cnes.regards.framework.jpa.multitenant.lock.AbstractTaskScheduler;
+import fr.cnes.regards.framework.jpa.multitenant.lock.LockingTaskExecutors;
 import fr.cnes.regards.framework.multitenant.IRuntimeTenantResolver;
 import fr.cnes.regards.framework.multitenant.ITenantResolver;
 import fr.cnes.regards.modules.storage.domain.database.StorageLocation;
+import net.javacrumbs.shedlock.core.LockAssert;
+import net.javacrumbs.shedlock.core.LockConfiguration;
+import net.javacrumbs.shedlock.core.LockingTaskExecutor.Task;
 
 /**
  * Enable storage task schedulers.
@@ -46,11 +52,19 @@ import fr.cnes.regards.modules.storage.domain.database.StorageLocation;
 @Component
 @Profile({ "!noschedule" })
 @EnableScheduling
-public class StorageLocationScheduler {
+public class StorageLocationScheduler extends AbstractTaskScheduler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StorageLocationScheduler.class);
 
     private static final String FILE_LOCATION_SCHEDULER_LOCK = "file_location_schedule_lock";
+
+    private static final String DEFAULT_INITIAL_DELAY = "10000";
+
+    private static final String DEFAULT_DELAY = "3600000";
+
+    private static final String MONITOR_TITLE = "Monitoring storage location scheduling";
+
+    private static final String MONITOR_ACTIONS = "MONITORING STORAGE LOCATION ACTIONS";
 
     @Autowired
     private ITenantResolver tenantResolver;
@@ -62,49 +76,49 @@ public class StorageLocationScheduler {
     private StorageLocationService storageLocationService;
 
     @Autowired
-    private ILockService lockService;
+    private LockingTaskExecutors lockingTaskExecutors;
 
-    @Value("${regards.storage.data.storage.threshold.percent:20}")
+    @Value("${regards.storage.location.full.calculation.ratio:20}")
     private Integer fullCalculationRatio;
 
-    private int lightCalculationCount = 0;
+    private static int lightCalculationCount = 0;
 
-    @Scheduled(fixedDelayString = "${regards.storage.check.data.storage.disk.usage.rate:10000}",
-            initialDelay = 60 * 1000)
-    public void monitorDataStorages() {
+    private static boolean reset = false;
 
+    private final Task monitorTask = () -> {
+        LockAssert.assertLocked();
+        long startTime = System.currentTimeMillis();
+        storageLocationService.monitorStorageLocations(reset);
+        LOGGER.trace("Data storages monitoring done in {}ms", System.currentTimeMillis() - startTime);
+    };
+
+    @Scheduled(initialDelayString = "${regards.storage.location.schedule.initial.delay:" + DEFAULT_INITIAL_DELAY + "}",
+            fixedDelayString = "${regards.storage.location.schedule.delay:" + DEFAULT_DELAY + "}")
+    public void scheduleUpdateRequests() {
+        if (lightCalculationCount > fullCalculationRatio) {
+            lightCalculationCount = 0;
+            reset = true;
+        } else {
+            lightCalculationCount++;
+            reset = false;
+        }
         for (String tenant : tenantResolver.getAllActiveTenants()) {
-            runtimeTenantResolver.forceTenant(tenant);
-            obtainLock();
             try {
-                long startTime = System.currentTimeMillis();
-                if (lightCalculationCount > fullCalculationRatio) {
-                    storageLocationService.monitorStorageLocations(true);
-                    lightCalculationCount = 0;
-                } else {
-                    storageLocationService.monitorStorageLocations(false);
-                    lightCalculationCount++;
-                }
-                LOGGER.trace("Data storages monitoring done in {}ms", System.currentTimeMillis() - startTime);
+                runtimeTenantResolver.forceTenant(tenant);
+                traceScheduling(tenant, MONITOR_ACTIONS);
+                lockingTaskExecutors.executeWithLock(monitorTask, new LockConfiguration(FILE_LOCATION_SCHEDULER_LOCK,
+                        Instant.now().plusSeconds(120)));
+            } catch (Throwable e) {
+                handleSchedulingError(MONITOR_ACTIONS, MONITOR_TITLE, e);
             } finally {
-                releaseLock();
                 runtimeTenantResolver.clearTenant();
             }
         }
     }
 
-    /**
-     * Get lock to ensure schedulers are not started at the same time by many instance of this microservice
-     * @return
-     */
-    private boolean obtainLock() {
-        return lockService.obtainLockOrSkip(FILE_LOCATION_SCHEDULER_LOCK, this, 60L);
+    @Override
+    protected Logger getLogger() {
+        return LOGGER;
     }
 
-    /**
-     * Release lock
-     */
-    private void releaseLock() {
-        lockService.releaseLock(FILE_LOCATION_SCHEDULER_LOCK, this);
-    }
 }

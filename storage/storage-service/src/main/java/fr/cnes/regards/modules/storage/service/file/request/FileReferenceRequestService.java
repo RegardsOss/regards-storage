@@ -30,12 +30,18 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.validation.Errors;
+import org.springframework.validation.Validator;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 
 import fr.cnes.regards.framework.jpa.multitenant.transactional.MultitenantTransactional;
 import fr.cnes.regards.framework.module.rest.exception.ModuleException;
+import fr.cnes.regards.framework.module.validation.ErrorTranslator;
+import fr.cnes.regards.framework.modules.plugins.domain.PluginConfiguration;
+import fr.cnes.regards.framework.modules.plugins.service.IPluginService;
+import fr.cnes.regards.framework.utils.plugins.exception.NotAvailablePluginConfigurationException;
 import fr.cnes.regards.modules.storage.dao.IFileReferenceRepository;
 import fr.cnes.regards.modules.storage.domain.database.FileLocation;
 import fr.cnes.regards.modules.storage.domain.database.FileReference;
@@ -46,8 +52,10 @@ import fr.cnes.regards.modules.storage.domain.dto.request.FileReferenceRequestDT
 import fr.cnes.regards.modules.storage.domain.event.FileReferenceEvent;
 import fr.cnes.regards.modules.storage.domain.event.FileRequestType;
 import fr.cnes.regards.modules.storage.domain.flow.ReferenceFlowItem;
+import fr.cnes.regards.modules.storage.domain.plugin.IStorageLocation;
 import fr.cnes.regards.modules.storage.service.file.FileReferenceEventPublisher;
 import fr.cnes.regards.modules.storage.service.file.FileReferenceService;
+import fr.cnes.regards.modules.storage.service.location.StoragePluginConfigurationHandler;
 
 /**
  * Service to handle File reference requests.
@@ -72,6 +80,15 @@ public class FileReferenceRequestService {
     @Autowired
     private FileReferenceService fileRefService;
 
+    @Autowired
+    private Validator validator;
+
+    @Autowired
+    private IPluginService pluginService;
+
+    @Autowired
+    private StoragePluginConfigurationHandler storagePluginConfHandler;
+
     @Value("${regards.storage.reference.requests.days.before.expiration:5}")
     private Integer nbDaysBeforeExpiration;
 
@@ -84,23 +101,16 @@ public class FileReferenceRequestService {
                 .flatMap(Set::stream).map(FileReferenceRequestDTO::getChecksum).collect(Collectors.toSet()));
         Set<FileDeletionRequest> existingDeletionRequests = fileDeletionRequestService.search(existingOnes);
         for (ReferenceFlowItem item : list) {
-            reqGrpService.granted(item.getGroupId(), FileRequestType.REFERENCE, item.getFiles().size(),
-                                  getRequestExpirationDate());
-            reference(item.getFiles(), item.getGroupId(), existingOnes, existingDeletionRequests);
+            Errors errors = item.validate(validator);
+            if (errors.hasErrors()) {
+                reqGrpService.denied(item.getGroupId(), FileRequestType.REFERENCE,
+                                     ErrorTranslator.getErrorsAsString(errors));
+            } else {
+                reqGrpService.granted(item.getGroupId(), FileRequestType.REFERENCE, item.getFiles().size(),
+                                      getRequestExpirationDate());
+                reference(item.getFiles(), item.getGroupId(), existingOnes, existingDeletionRequests);
+            }
         }
-    }
-
-    /**
-     * Initialize new reference requests for a given group identifier
-     * @param requests
-     * @param groupId
-     */
-    public void reference(Collection<FileReferenceRequestDTO> requests, String groupId) {
-        // Retrieve already existing ones by checksum only to improve performance. The associated storage location is checked later
-        Set<FileReference> existingOnes = fileRefService
-                .search(requests.stream().map(FileReferenceRequestDTO::getChecksum).collect(Collectors.toSet()));
-        Set<FileDeletionRequest> existingDeletionRequests = fileDeletionRequestService.search(existingOnes);
-        reference(requests, groupId, existingOnes, existingDeletionRequests);
     }
 
     /**
@@ -184,6 +194,8 @@ public class FileReferenceRequestService {
         if (fileRef.isPresent()) {
             return handleAlreadyExists(fileRef.get(), fileDelReq, request, groupIds);
         } else {
+            // If referenced file is associated to a known storage location then validate the reference
+            validateReferenceUrl(request);
             FileReference newFileRef = fileRefService.create(Lists.newArrayList(request.getOwner()),
                                                              request.buildMetaInfo(),
                                                              new FileLocation(request.getStorage(), request.getUrl()));
@@ -192,6 +204,25 @@ public class FileReferenceRequestService {
                                            newFileRef.getMetaInfo().getChecksum());
             fileRefEventPublisher.storeSuccess(newFileRef, message, groupIds);
             return newFileRef;
+        }
+    }
+
+    private void validateReferenceUrl(FileReferenceRequestDTO request) throws ModuleException {
+        Optional<PluginConfiguration> conf = storagePluginConfHandler.getConfiguredStorage(request.getStorage());
+        if (conf.isPresent()) {
+            try {
+                IStorageLocation storagePlugin = pluginService.getPlugin(conf.get().getBusinessId());
+                Set<String> errors = Sets.newHashSet();
+                if (!storagePlugin.isValidUrl(request.getUrl(), errors)) {
+                    throw new ModuleException(String
+                            .format("File reference %s url=%s format is not valid for storage location %s. Cause : %s",
+                                    request.getFileName(), request.getUrl(), conf.get().getBusinessId(), errors));
+                }
+            } catch (NotAvailablePluginConfigurationException e) {
+                throw new ModuleException(String.format("File reference %s cannot be validated by the %s plugin.",
+                                                        request.getFileName(), conf.get().getBusinessId()),
+                        e);
+            }
         }
     }
 

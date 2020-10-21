@@ -19,7 +19,9 @@
 package fr.cnes.regards.modules.storage.service.file.flow.performance;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -113,7 +115,7 @@ public class FlowPerformanceTest extends AbstractStorageTest {
         if (fileRefRepo.count() == 0) {
             // Insert many refs
             Set<FileReference> toSave = Sets.newHashSet();
-            for (Long i = 0L; i < 100_000; i++) {
+            for (Long i = 0L; i < 1_000_000; i++) {
                 FileReferenceMetaInfo metaInfo = new FileReferenceMetaInfo(UUID.randomUUID().toString(), "UUID",
                         "file_" + i + ".test", i, MediaType.APPLICATION_OCTET_STREAM);
                 FileLocation location = new FileLocation("storage_" + i, "storage://plop/file");
@@ -155,30 +157,36 @@ public class FlowPerformanceTest extends AbstractStorageTest {
         LOGGER.info(" --------     REFERENCE TEST     --------- ");
         String refStorage = "storage-1";
         String storage = "storage" + UUID.randomUUID().toString();
+        List<ReferenceFlowItem> items = new ArrayList<>();
         for (int i = 0; i < 5000; i++) {
             String newOwner = "owner-" + UUID.randomUUID().toString();
             String checksum = UUID.randomUUID().toString();
             String checksum2 = UUID.randomUUID().toString();
             Set<FileReferenceRequestDTO> requests = Sets.newHashSet();
-            requests.add(FileReferenceRequestDTO.build("quicklook.1-" + checksum, checksum2, "MD5",
+            requests.add(FileReferenceRequestDTO.build("quicklook.1-" + checksum, UUID.randomUUID().toString(), "MD5",
                                                        "application/octet-stream", 10L, newOwner, refStorage,
                                                        "file://storage/location/quicklook1"));
-            requests.add(FileReferenceRequestDTO.build("quicklook.2-" + checksum, checksum2, "MD5",
+            requests.add(FileReferenceRequestDTO.build("quicklook.2-" + checksum, UUID.randomUUID().toString(), "MD5",
                                                        "application/octet-stream", 10L, newOwner, refStorage,
                                                        "file://storage/location/quicklook1"));
-            requests.add(FileReferenceRequestDTO.build("quicklook.3-" + checksum, checksum2, "MD5",
+            requests.add(FileReferenceRequestDTO.build("quicklook.3-" + checksum, UUID.randomUUID().toString(), "MD5",
                                                        "application/octet-stream", 10L, newOwner, refStorage,
                                                        "file://storage/location/quicklook1"));
-            requests.add(FileReferenceRequestDTO.build("quicklook.4-" + checksum, checksum2, "MD5",
+            requests.add(FileReferenceRequestDTO.build("quicklook.4-" + checksum, UUID.randomUUID().toString(), "MD5",
                                                        "application/octet-stream", 10L, newOwner, refStorage,
                                                        "file://storage/location/quicklook1"));
             // Create a new bus message File reference request
             requests.add(FileReferenceRequestDTO.build("file.name", checksum, "MD5", "application/octet-stream", 10L,
                                                        newOwner, storage, "file://storage/location/file.name"));
-            ReferenceFlowItem item = ReferenceFlowItem.build(requests, UUID.randomUUID().toString());
-            TenantWrapper<ReferenceFlowItem> wrapper = new TenantWrapper<>(item, getDefaultTenant());
-            // Publish request
-            referenceFlowHandler.handle(wrapper);
+            items.add(ReferenceFlowItem.build(requests, UUID.randomUUID().toString()));
+            if (items.size() >= referenceFlowHandler.getBatchSize()) {
+                referenceFlowHandler.handleBatch(getDefaultTenant(), items);
+                items.clear();
+            }
+        }
+        if (items.size() > 0) {
+            referenceFlowHandler.handleBatch(getDefaultTenant(), items);
+            items.clear();
         }
 
         int loops = 0;
@@ -204,7 +212,7 @@ public class FlowPerformanceTest extends AbstractStorageTest {
                     .build(FileStorageRequestDTO.build("file.name", checksum, "MD5", "application/octet-stream",
                                                        "owner-test", originUrl, ONLINE_CONF_LABEL, Optional.empty()),
                            UUID.randomUUID().toString());
-            TenantWrapper<StorageFlowItem> wrapper = new TenantWrapper<>(item, getDefaultTenant());
+            TenantWrapper<StorageFlowItem> wrapper = TenantWrapper.build(item, getDefaultTenant());
             // Publish request
             storeFlowHandler.handle(wrapper);
         }
@@ -247,7 +255,7 @@ public class FlowPerformanceTest extends AbstractStorageTest {
             DeletionFlowItem item = DeletionFlowItem.build(FileDeletionRequestDTO
                     .build(fileRef.getMetaInfo().getChecksum(), fileRef.getLocation().getStorage(),
                            fileRef.getOwners().iterator().next(), false), UUID.randomUUID().toString());
-            TenantWrapper<DeletionFlowItem> wrapper = new TenantWrapper<>(item, getDefaultTenant());
+            TenantWrapper<DeletionFlowItem> wrapper = TenantWrapper.build(item, getDefaultTenant());
             deleteHandler.handle(wrapper);
         }
         LOGGER.info("Waiting ....");
@@ -271,7 +279,7 @@ public class FlowPerformanceTest extends AbstractStorageTest {
             DeletionFlowItem item = DeletionFlowItem.build(FileDeletionRequestDTO
                     .build(fileRef.getMetaInfo().getChecksum(), fileRef.getLocation().getStorage(),
                            fileRef.getOwners().iterator().next(), false), UUID.randomUUID().toString());
-            TenantWrapper<DeletionFlowItem> wrapper = new TenantWrapper<>(item, getDefaultTenant());
+            TenantWrapper<DeletionFlowItem> wrapper = TenantWrapper.build(item, getDefaultTenant());
             deleteHandler.handle(wrapper);
         }
         LOGGER.info("Waiting ....");
@@ -294,10 +302,9 @@ public class FlowPerformanceTest extends AbstractStorageTest {
         // Create a new bus message File reference request
         AvailabilityFlowItem item = AvailabilityFlowItem.build(nlChecksums, OffsetDateTime.now().plusDays(1),
                                                                UUID.randomUUID().toString());
-        TenantWrapper<AvailabilityFlowItem> wrapper = new TenantWrapper<>(item, getDefaultTenant());
-        // Publish request
-        availabilityHandler.handle(wrapper);
-        availabilityHandler.handleQueue();
+        List<AvailabilityFlowItem> items = new ArrayList<>();
+        items.add(item);
+        availabilityHandler.handleBatch(getDefaultTenant(), items);
         runtimeTenantResolver.forceTenant(getDefaultTenant());
         Assert.assertEquals("Invalid count of cache file request", nlChecksums.size(), fileCacheReqRepo.count());
     }

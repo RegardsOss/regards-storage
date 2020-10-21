@@ -63,7 +63,7 @@ import fr.cnes.regards.modules.storage.service.file.FileReferenceEventPublisher;
  * When all requests of a group has been rejected by the associated service, then a {@link FileRequestsGroupEvent} is published
  *  with {@link FlowItemStatus#DENIED} status.<br>
  * When all requests of a group are done (successfully or with errors), a {@link FileRequestsGroupEvent} is published
- * with {@link FlowItemStatus#DONE} or with {@link FlowItemStatus#ERROR} status.<br>
+ * with {@link FlowItemStatus#SUCCESS} or with {@link FlowItemStatus#ERROR} status.<br>
  *
  * @author Sébastien Binda
  */
@@ -77,8 +77,8 @@ public class RequestsGroupService {
      * Maximum number of request group to handle in one transaction. This is limited to avoid issue one too much
      * amqp message to send at a time.
      */
-    @Value("${regards.storage.groups.requests.bulk:100}")
-    private final Integer maxRequestPerTransaction = 100;
+    @Value("${regards.storage.groups.requests.bulk:500}")
+    private final Integer maxRequestPerTransaction = 500;
 
     @Autowired
     private IPublisher publisher;
@@ -121,15 +121,6 @@ public class RequestsGroupService {
 
     /**
      * Handle new request error for the given groupId.<br>
-     *
-     * @param groupId
-     * @param type
-     * @param checksum
-     * @param storage
-     * @param storePath
-     * @param owners
-     * @param errorCause
-     * @param checkGroupDone
      */
     public void requestError(String groupId, FileRequestType type, String checksum, String storage, String storePath,
             Set<String> owners, String errorCause) {
@@ -188,9 +179,6 @@ public class RequestsGroupService {
 
     /**
      * Save new granted request groups and send bus messages to inform that the given groupIds are granted.
-     *
-     * @param groupId
-     * @param type
      */
     public void granted(Set<String> groupIds, FileRequestType type, OffsetDateTime expirationDate) {
         // Create new group request
@@ -217,11 +205,12 @@ public class RequestsGroupService {
         LOGGER.trace("[REQUEST GROUPS] Start checking request groups ... ");
         // Always search the first page of requests until there is no requests anymore.
         // To do so, we order on id to ensure to not handle same requests multiple times.
-        Page<RequestGroup> response = reqGroupRepository.findAll(PageRequest.of(0, 500, Direction.ASC, "id"));
-        long totalChecked = response.getTotalElements();
+        Pageable page = PageRequest.of(0, maxRequestPerTransaction, Direction.ASC, "id");
         Set<RequestGroup> groupDones = Sets.newHashSet();
-        if (totalChecked > 0) {
-            do {
+        Page<RequestGroup> response;
+        do {
+            response = reqGroupRepository.findAllByOrderByCreationDateAsc(page);
+            if (response.hasContent()) {
                 Iterator<RequestGroup> it = response.getContent().iterator();
                 do {
                     RequestGroup reqGrp = it.next();
@@ -230,10 +219,10 @@ public class RequestsGroupService {
                     } else {
                         checkRequestGroupExpired(reqGrp);
                     }
-                } while (it.hasNext());
-                response = reqGroupRepository.findAll(response.getPageable().next());
-            } while (response.hasNext() && (groupDones.size() < maxRequestPerTransaction));
-        }
+                } while (it.hasNext() && (groupDones.size() < maxRequestPerTransaction));
+            }
+            page = response.nextPageable();
+        } while (response.hasNext() && (groupDones.size() < maxRequestPerTransaction));
         String message = "[REQUEST GROUPS] Checking request groups done in {}ms. Terminated groups {}/{}";
         if (!groupDones.isEmpty()) {
             Set<RequestResultInfo> infos = groupReqInfoRepository
@@ -242,9 +231,12 @@ public class RequestsGroupService {
                 groupDone(group,
                           infos.stream().filter(i -> i.getGroupId().equals(group.getId())).collect(Collectors.toSet()));
             }
-            LOGGER.info(message, System.currentTimeMillis() - start, groupDones.size(), totalChecked);
+            groupReqInfoRepository
+                    .deleteByGroupIdIn(groupDones.stream().map(RequestGroup::getId).collect(Collectors.toSet()));
+            reqGroupRepository.deleteAll(groupDones);
+            LOGGER.info(message, System.currentTimeMillis() - start, groupDones.size(), response.getTotalElements());
         } else {
-            LOGGER.debug(message, System.currentTimeMillis() - start, 0, totalChecked);
+            LOGGER.debug(message, System.currentTimeMillis() - start, 0, response.getTotalElements());
         }
     }
 
@@ -337,8 +329,6 @@ public class RequestsGroupService {
 
     /**
      * Handle a group request done. All requests of the given group has terminated (success or error).
-     * @param groupId
-     * @param type
      */
     private void groupDone(RequestGroup reqGrp, Set<RequestResultInfo> resultInfos,
             Optional<FlowItemStatus> forcedStatus) {
@@ -366,9 +356,6 @@ public class RequestsGroupService {
                          reqGrp.getId(), successes.size(), errors.size());
             publisher.publish(FileRequestsGroupEvent.buildError(reqGrp.getId(), reqGrp.getType(), successes, errors));
         }
-        // 3. Clear
-        groupReqInfoRepository.deleteByGroupId(reqGrp.getId());
-        reqGroupRepository.delete(reqGrp);
     }
 
     public void deleteRequestInfoForFile(Long fileId) {
@@ -410,6 +397,9 @@ public class RequestsGroupService {
                           infos.stream().filter(i -> i.getGroupId().equals(group.getId())).collect(Collectors.toSet()),
                           Optional.of(FlowItemStatus.ERROR));
             }
+            groupReqInfoRepository
+                    .deleteByGroupIdIn(groups.stream().map(RequestGroup::getId).collect(Collectors.toSet()));
+            reqGroupRepository.deleteAll(groups);
         }
     }
 }

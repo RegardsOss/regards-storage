@@ -138,26 +138,13 @@ public class FileStorageRequestService {
         Set<String> checksums = list.stream().map(StorageFlowItem::getFiles).flatMap(Set::stream)
                 .map(FileStorageRequestDTO::getChecksum).collect(Collectors.toSet());
         Set<FileReference> existingOnes = fileRefService.search(checksums);
-        Set<FileStorageRequest> existingRequests = Sets.newHashSet();
+        Set<FileStorageRequest> existingRequests = fileStorageRequestRepo.findByMetaInfoChecksumIn(checksums);
         Set<FileDeletionRequest> existingDeletionRequests = fileDelReqService.searchByChecksums(checksums);
         for (StorageFlowItem item : list) {
-            store(item.getFiles(), item.getGroupId(), existingOnes, existingRequests, existingDeletionRequests);
+            doStore(item.getFiles(), item.getGroupId(), existingOnes, existingRequests, existingDeletionRequests);
             reqGroupService.granted(item.getGroupId(), FileRequestType.STORAGE, item.getFiles().size(),
                                     getRequestExpirationDate());
         }
-    }
-
-    /**
-     * Initialize new storage requests for a given group identifier
-     * @param requests
-     * @param groupId
-     */
-    public void store(Collection<FileStorageRequestDTO> requests, String groupId) {
-        Set<String> checksums = requests.stream().map(FileStorageRequestDTO::getChecksum).collect(Collectors.toSet());
-        Set<FileReference> existingOnes = fileRefService.search(checksums);
-        Set<FileStorageRequest> existingRequests = fileStorageRequestRepo.findByMetaInfoChecksumIn(checksums);
-        Set<FileDeletionRequest> existingDeletionRequests = fileDelReqService.searchByChecksums(checksums);
-        store(requests, groupId, existingOnes, existingRequests, existingDeletionRequests);
     }
 
     /**
@@ -168,7 +155,7 @@ public class FileStorageRequestService {
      * @param existingOnes
      * @param existingRequests
      */
-    public void store(Collection<FileStorageRequestDTO> requests, String groupId,
+    private void doStore(Collection<FileStorageRequestDTO> requests, String groupId,
             Collection<FileReference> existingOnes, Set<FileStorageRequest> existingRequests,
             Set<FileDeletionRequest> existingDeletionRequests) {
         // Retrieve already existing ones by checksum only to improve performance. The associated storage location is checked later
@@ -318,8 +305,6 @@ public class FileStorageRequestService {
 
     /**
      * Search for {@link FileStorageRequest}s matching the given destination storage and checksum
-     * @param destinationStorage
-     * @param checksum
      * @return {@link FileStorageRequest}
      */
     @Transactional(readOnly = true)
@@ -454,7 +439,7 @@ public class FileStorageRequestService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void scheduleJobsByStorage(Collection<JobInfo> jobList, String storage,
             List<FileStorageRequest> fileStorageRequests) {
-        if (storageHandler.getConfiguredStorages().contains(storage)) {
+        if (storageHandler.isConfigured(storage)) {
             jobList.addAll(scheduleJobsByStorage(storage, fileStorageRequests));
         } else {
             handleStorageNotAvailable(fileStorageRequests, Optional.empty());
@@ -538,7 +523,7 @@ public class FileStorageRequestService {
                 storageSubDirectory, groupId);
         fileStorageRequest.setStatus(reqStatusService.getNewStatus(fileStorageRequest, status));
         fileStorageRequest.setErrorCause(errorCause.orElse(null));
-        if (!storageHandler.getConfiguredStorages().contains(storage)) {
+        if (!storageHandler.isConfigured(storage)) {
             // The storage destination is unknown, we can already set the request in error status
             handleStorageNotAvailable(fileStorageRequest, Optional.empty());
         } else {

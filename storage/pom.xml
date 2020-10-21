@@ -23,12 +23,12 @@
     <artifactId>storage</artifactId>
     <packaging>pom</packaging>
 
-    <parent>
-        <groupId>fr.cnes.regards</groupId>
-        <artifactId>regards-parent</artifactId>
-	<version>1.0.1</version>
-	<relativePath/>
-    </parent>
+	<parent>
+		<groupId>fr.cnes.regards</groupId>
+		<artifactId>regards-parent</artifactId>
+		<version>1.2.1</version>
+		<relativePath/>
+	</parent>
 
     <url>https://github.com/RegardsOss/RegardsOss.github.io</url>
     <inceptionYear>2016</inceptionYear>
@@ -57,27 +57,27 @@
             <dependency>
                 <groupId>fr.cnes.regards.modules</groupId>
                 <artifactId>storage-dao</artifactId>
-                <version>1.0.1</version>
+                <version>1.2.1</version>
             </dependency>
             <dependency>
                 <groupId>fr.cnes.regards.modules</groupId>
                 <artifactId>storage-domain</artifactId>
-                <version>1.0.1</version>
+                <version>1.2.1</version>
             </dependency>
             <dependency>
                 <groupId>fr.cnes.regards.modules</groupId>
                 <artifactId>storage-rest</artifactId>
-                <version>1.0.1</version>
+                <version>1.2.1</version>
             </dependency>
             <dependency>
                 <groupId>fr.cnes.regards.modules</groupId>
                 <artifactId>storage-service</artifactId>
-                <version>1.0.1</version>
+                <version>1.2.1</version>
             </dependency>
             <dependency>
                 <groupId>fr.cnes.regards.modules</groupId>
                 <artifactId>storage-client</artifactId>
-                <version>1.0.1</version>
+                <version>1.2.1</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

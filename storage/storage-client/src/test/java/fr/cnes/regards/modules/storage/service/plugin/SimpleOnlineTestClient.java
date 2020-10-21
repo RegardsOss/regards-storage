@@ -24,6 +24,7 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Collection;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 import org.apache.commons.compress.utils.Lists;
@@ -210,6 +211,11 @@ public class SimpleOnlineTestClient implements IOnlineStorageLocation {
 
     @Override
     public boolean allowPhysicalDeletion() {
+        return true;
+    }
+
+    @Override
+    public boolean isValidUrl(String urlToValidate, Set<String> errors) {
         return true;
     }
 

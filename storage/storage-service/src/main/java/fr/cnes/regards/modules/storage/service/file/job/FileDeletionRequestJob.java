@@ -90,7 +90,7 @@ public class FileDeletionRequestJob extends AbstractJob<Void> {
         String plgBusinessId = parameters.get(DATA_STORAGE_CONF_BUSINESS_ID).getValue();
         FileDeletionWorkingSubset workingSubset = parameters.get(WORKING_SUB_SET).getValue();
         nbRequestToHandle = workingSubset.getFileDeletionRequests().size();
-        LOGGER.debug("[DELETION JOB] Runing deletion job for {} deletion requests", nbRequestToHandle);
+        logger.debug("[DELETION JOB] Runing deletion job for {} deletion requests", nbRequestToHandle);
         String errorCause = null;
         try {
             IStorageLocation storagePlugin = pluginService.getPlugin(plgBusinessId);
@@ -116,7 +116,7 @@ public class FileDeletionRequestJob extends AbstractJob<Void> {
                 }
             }
             if (nbRequestToHandle > 0) {
-                LOGGER.info("[DELETION JOB] Deletion job handled in {}ms for {} deletion requests",
+                logger.info("[DELETION JOB] Deletion job handled in {}ms for {} deletion requests",
                             System.currentTimeMillis() - start, nbRequestToHandle);
             }
         }

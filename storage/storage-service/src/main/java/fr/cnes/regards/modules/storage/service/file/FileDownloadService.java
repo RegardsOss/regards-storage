@@ -57,6 +57,7 @@ import fr.cnes.regards.modules.storage.domain.database.StorageLocationConfigurat
 import fr.cnes.regards.modules.storage.domain.dto.FileReferenceDTO;
 import fr.cnes.regards.modules.storage.domain.exception.NearlineFileNotAvailableException;
 import fr.cnes.regards.modules.storage.domain.plugin.IOnlineStorageLocation;
+import fr.cnes.regards.modules.storage.domain.plugin.StorageType;
 import fr.cnes.regards.modules.storage.service.cache.CacheService;
 import fr.cnes.regards.modules.storage.service.file.request.FileCacheRequestService;
 import fr.cnes.regards.modules.storage.service.location.StorageLocationConfigurationService;
@@ -113,7 +114,6 @@ public class FileDownloadService {
      * </ul>
      *
      * @param checksum Checksum of the file to download
-     * @throws FileNotFoundException
      */
     @Transactional(noRollbackFor = { EntityNotFoundException.class })
     public DownloadableFile downloadFile(String checksum) throws ModuleException {
@@ -130,16 +130,25 @@ public class FileDownloadService {
             Map<String, FileReference> storages = fileRefs.stream()
                     .collect(Collectors.toMap(f -> f.getLocation().getStorage(), f -> f));
             // 2. get the storage location with the higher priority
-            Optional<StorageLocationConfiguration> storageLocation = storageLocationConfService
-                    .searchActiveHigherPriority(storages.keySet());
-            if (storageLocation.isPresent()) {
-                PluginConfiguration conf = storageLocation.get().getPluginConfiguration();
+            Optional<StorageLocationConfiguration> oStorageLocation = storageLocationConfService
+                    .searchActiveHigherPriority(storages.keySet(), StorageType.ONLINE);
+            if (oStorageLocation.isPresent()) {
+                StorageLocationConfiguration storageLocation = oStorageLocation.get();
+                PluginConfiguration conf = storageLocation.getPluginConfiguration();
                 FileReference fileToDownload = storages.get(conf.getLabel());
-                DownloadableFile df = new DownloadableFile(downloadFileReference(fileToDownload),
+                return new DownloadableFile(downloadOnline(fileToDownload, storageLocation),
                         fileToDownload.getMetaInfo().getFileSize(), fileToDownload.getMetaInfo().getFileName(),
                         fileToDownload.getMetaInfo().getMimeType());
-                return df;
             } else {
+                oStorageLocation = storageLocationConfService.searchActiveHigherPriority(storages.keySet(),
+                                                                                         StorageType.NEARLINE);
+                if (oStorageLocation.isPresent()) {
+                    StorageLocationConfiguration storageLocation = oStorageLocation.get();
+                    PluginConfiguration conf = storageLocation.getPluginConfiguration();
+                    FileReference fileToDownload = storages.get(conf.getLabel());
+                    return new DownloadableFile(download(fileToDownload), fileToDownload.getMetaInfo().getFileSize(),
+                            fileToDownload.getMetaInfo().getFileName(), fileToDownload.getMetaInfo().getMimeType());
+                }
                 throw new ModuleException(String
                         .format("No storage location configured for the given file reference (checksum %s). The file can not be download from %s.",
                                 checksum, Arrays.toString(storages.keySet().toArray())));
@@ -218,6 +227,9 @@ public class FileDownloadService {
                             fileToDownload.getMetaInfo().getFileName(), fileToDownload.getMetaInfo().getChecksum(),
                             fileToDownload.getLocation().toString()),
                     e);
+        } catch (FileNotFoundException e) {
+            LOGGER.error(e.getMessage(), e);
+            throw new EntityNotFoundException(e.getMessage());
         } catch (Exception e) {
             LOGGER.error(e.getMessage(), e);
             throw new ModuleException(e.getMessage(), e);
@@ -255,7 +267,7 @@ public class FileDownloadService {
     /**
      * Generate a public download URL for the file associated to the given Checksum
      * @param checksum
-     * @return
+     * @return download url
      * @throws ModuleException if the Eureka server is not reachable
      */
     public String generateDownloadUrl(String checksum) throws ModuleException {
@@ -264,7 +276,7 @@ public class FileDownloadService {
             String host = instance.get().getUri().toString();
             String path = Paths.get(FILES_PATH, DOWNLOAD_TOKEN_PATH).toString();
             String p = path.toString().replace("{checksum}", checksum);
-            p = (p.charAt(0) == '/') ? p.replaceFirst("/", "") : p;
+            p = p.charAt(0) == '/' ? p.replaceFirst("/", "") : p;
             return String.format("%s/%s?scope=%s&%s=%s", host, p, tenantResolver.getTenant(), TOKEN_PARAM,
                                  createDownloadToken(checksum));
         } else {
@@ -289,7 +301,7 @@ public class FileDownloadService {
     /**
      * Generate a download token for the file associated to the given checksum
      * @param checksum
-     * @return
+     * @return download token
      */
     public String createDownloadToken(String checksum) {
         String newToken = UUID.randomUUID().toString();

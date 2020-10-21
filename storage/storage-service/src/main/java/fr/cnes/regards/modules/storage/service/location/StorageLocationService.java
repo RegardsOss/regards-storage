@@ -130,7 +130,6 @@ public class StorageLocationService {
     /**
      * Retrieve one {@link StorageLocation} by its id
      * @param storageId
-     * @return
      * @throws EntityNotFoundException
      */
     public StorageLocationDTO getById(String storageId) throws EntityNotFoundException {
@@ -210,6 +209,7 @@ public class StorageLocationService {
      * Monitor all storage locations to calculate informations about stored files.
      */
     public void monitorStorageLocations(Boolean reset) {
+        LOGGER.trace("Starting locations monitor process (reset={})", reset.toString());
         OffsetDateTime monitoringDate = OffsetDateTime.now();
         // Retrieve last monitoring process
         StorageMonitoring storageMonitoring = storageMonitoringRepo.findById(0L)
@@ -226,6 +226,7 @@ public class StorageLocationService {
         long start = System.currentTimeMillis();
         Collection<StorageMonitoringAggregation> aggregations = fileReferenceService
                 .aggragateFilesSizePerStorage(storageMonitoring.getLastFileReferenceIdMonitored());
+        LOGGER.trace("Aggregation calcul done (reset={})", reset.toString());
         for (StorageMonitoringAggregation agg : aggregations) {
             // Retrieve associated storage info if exists
             Optional<StorageLocation> oStorage = storageLocationRepo.findByName(agg.getStorage());
@@ -262,6 +263,8 @@ public class StorageLocationService {
                     LOGGER.warn(message);
                     notifyAdmins(String.format("Data storage %s is almost full", storage.getName()), message,
                                  NotificationLevel.WARNING, MimeTypeUtils.TEXT_PLAIN);
+                } else {
+                    LOGGER.trace("Storage location %s monitoring done with no warnings.", storage.getName());
                 }
             } else {
                 LOGGER.warn("[STORAGE LOCATION] Ratio calculation for {} storage disabled cause storage allowed size is not configured.",
@@ -299,7 +302,7 @@ public class StorageLocationService {
 
     /**
      * Delete the given storage location informations. <br/>
-     * Files reference are not deleted, to do so, use {@link this#deleteFiles(String, Boolean)}
+     * Files reference are not deleted, to do so, use {@link #deleteFiles(String, Boolean)}
      * @param storageLocationId
      * @throws EntityNotFoundException
      */
@@ -372,7 +375,6 @@ public class StorageLocationService {
     /**
      * Creates a new configuration for the given storage location.
      * @param storageLocation
-     * @return
      * @throws ModuleException
      */
     public StorageLocationDTO configureLocation(StorageLocationDTO storageLocation) throws ModuleException {
@@ -388,7 +390,6 @@ public class StorageLocationService {
     /**
      * Update the configuration of the given storage location.
      * @param storageLocation
-     * @return
      * @throws ModuleException
      */
     public StorageLocationDTO updateLocationConfiguration(String storageId, StorageLocationDTO storageLocation)
