@@ -49,11 +49,8 @@ public class FileRequestGroupEventHandler
 
     private static final Logger LOGGER = LoggerFactory.getLogger(FileRequestGroupEventHandler.class);
 
-    /**
-     * Bulk size limit to handle messages
-     */
-    @Value("${regards.storage.client.responses.items.bulk.size:250}")
-    private int BULK_SIZE;
+    @Value("${regards.storage.client.response.batch.size:500}")
+    private Integer batchSize;
 
     @Autowired(required = false)
     private IStorageRequestListener listener;
@@ -63,6 +60,11 @@ public class FileRequestGroupEventHandler
 
     @Autowired
     private ISubscriber subscriber;
+
+    @Override
+    public int getBatchSize() {
+        return batchSize;
+    }
 
     @Override
     public void onApplicationEvent(ApplicationReadyEvent event) {
@@ -117,23 +119,17 @@ public class FileRequestGroupEventHandler
         handleDenied(denied);
     }
 
-    /**
-     * @param denied
-     */
-    private void handleDenied(Set<FileRequestsGroupEvent> events) {
-        if ((events != null) && !events.isEmpty()) {
-            listener.onRequestDenied(events.stream()
+    private void handleDenied(Set<FileRequestsGroupEvent> denied) {
+        if ((denied != null) && !denied.isEmpty()) {
+            listener.onRequestDenied(denied.stream()
                     .map(e -> RequestInfo.build(e.getGroupId(), e.getSuccess(), e.getErrors()))
                     .collect(Collectors.toSet()));
         }
     }
 
-    /**
-     * @param granted
-     */
-    private void handleGranted(Set<FileRequestsGroupEvent> events) {
-        if ((events != null) && !events.isEmpty()) {
-            listener.onRequestGranted(events.stream()
+    private void handleGranted(Set<FileRequestsGroupEvent> granted) {
+        if ((granted != null) && !granted.isEmpty()) {
+            listener.onRequestGranted(granted.stream()
                     .map(e -> RequestInfo.build(e.getGroupId(), e.getSuccess(), e.getErrors()))
                     .collect(Collectors.toSet()));
         }

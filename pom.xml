@@ -48,13 +48,13 @@
     <parent>
         <groupId>fr.cnes.regards</groupId>
         <artifactId>regards-aggregator-parent</artifactId>
-        <version>1.2.1</version>
+        <version>1.4.0</version>
         <relativePath/>
     </parent>
 
     <modules>
-        <module>bootstrap-storage</module>
     	<module>storage</module>
+        <module>bootstrap-storage</module>
   </modules>
 
 </project>

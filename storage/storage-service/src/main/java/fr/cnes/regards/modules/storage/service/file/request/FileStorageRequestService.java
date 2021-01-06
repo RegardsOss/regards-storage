@@ -167,13 +167,14 @@ public class FileStorageRequestService {
                     .filter(f -> f.getMetaInfo().getChecksum().equals(request.getChecksum())
                             && f.getLocation().getStorage().equals(request.getStorage()))
                     .findFirst();
-            Optional<FileStorageRequest> oReq = existingRequests.stream()
-                    .filter(f -> f.getMetaInfo().getChecksum().equals(request.getChecksum())
-                            && f.getStorage().equals(request.getStorage()))
+            Optional<FileStorageRequest> oReq = existingRequests.stream().filter(f -> f.getMetaInfo().getChecksum()
+                    .equals(request.getChecksum()) && f.getStorage().equals(request.getStorage())
+                    && ((f.getStatus() == FileRequestStatus.TO_DO) || (f.getStatus() == FileRequestStatus.ERROR)))
                     .findFirst();
             Optional<FileDeletionRequest> oDelReq = existingDeletionRequests.stream()
                     .filter(f -> f.getFileReference().getMetaInfo().getChecksum().equals(request.getChecksum())
-                            && f.getStorage().equals(request.getStorage()))
+                            && f.getStorage().equals(request.getStorage())
+                            && f.getStatus().equals(FileRequestStatus.TO_DO))
                     .findFirst();
             RequestResult result = handleRequest(request, oFileRef, oReq, oDelReq, groupId);
             if (result.getFileReference().isPresent()) {
@@ -263,8 +264,7 @@ public class FileStorageRequestService {
             return handleFileToStoreAlreadyExists(fileRef.get(), request, oDeletionReq, groupId);
         } else if (oReq.isPresent()) {
             FileStorageRequest existingReq = oReq.get();
-            existingReq.getOwners().add(request.getOwner());
-            existingReq.getGroupIds().add(groupId);
+            existingReq.update(request, groupId);
             if (existingReq.getStatus() == FileRequestStatus.ERROR) {
                 // Allow retry of error requests when the same request is sent
                 existingReq.setStatus(FileRequestStatus.TO_DO);
@@ -457,8 +457,6 @@ public class FileStorageRequestService {
         Collection<JobInfo> jobInfoList = Sets.newHashSet();
         Collection<FileStorageRequest> remainingRequests = Sets.newHashSet();
         remainingRequests.addAll(fileStorageRequests);
-        // FIXME : Check if file reference exists before schedule storage job.
-        // see handleFileToStoreAlreadyExists
         try {
             PluginConfiguration conf = pluginService.getPluginConfigurationByLabel(storage);
             IStorageLocation storagePlugin = pluginService.getPlugin(conf.getBusinessId());

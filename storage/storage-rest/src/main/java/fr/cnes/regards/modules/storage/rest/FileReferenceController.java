@@ -18,39 +18,9 @@
  */
 package fr.cnes.regards.modules.storage.rest;
 
-import java.io.BufferedWriter;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.util.Collection;
-import java.util.stream.Collectors;
-
-import javax.servlet.http.HttpServletResponse;
-import javax.validation.Valid;
-
-import org.apache.commons.csv.CSVFormat;
-import org.apache.commons.csv.CSVPrinter;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.core.io.InputStreamResource;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.http.ContentDisposition;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.util.MimeType;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
-
+import com.google.common.annotations.VisibleForTesting;
 import fr.cnes.regards.framework.amqp.domain.TenantWrapper;
+import fr.cnes.regards.framework.authentication.IAuthenticationResolver;
 import fr.cnes.regards.framework.module.rest.exception.EntityNotFoundException;
 import fr.cnes.regards.framework.module.rest.exception.EntityOperationForbiddenException;
 import fr.cnes.regards.framework.module.rest.exception.ModuleException;
@@ -62,7 +32,34 @@ import fr.cnes.regards.modules.storage.domain.database.FileReference;
 import fr.cnes.regards.modules.storage.domain.flow.StorageFlowItem;
 import fr.cnes.regards.modules.storage.service.file.FileDownloadService;
 import fr.cnes.regards.modules.storage.service.file.FileReferenceService;
+import fr.cnes.regards.modules.storage.service.file.download.IQuotaExceededReporter;
+import fr.cnes.regards.modules.storage.service.file.download.IQuotaService;
+import fr.cnes.regards.modules.storage.service.file.exception.DownloadLimitExceededException;
 import fr.cnes.regards.modules.storage.service.file.flow.StorageFlowItemHandler;
+import io.vavr.control.Try;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVPrinter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.InputStreamResource;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.http.*;
+import org.springframework.util.MimeType;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+
+import javax.servlet.http.HttpServletResponse;
+import javax.validation.Valid;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.util.Collection;
+import java.util.concurrent.Callable;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Controller to access {@link FileReference} by rest API.
@@ -89,7 +86,16 @@ public class FileReferenceController {
     private FileReferenceService fileRefService;
 
     @Autowired
+    private IQuotaService<ResponseEntity<StreamingResponseBody>> downloadQuotaService;
+
+    @Autowired
+    private IQuotaExceededReporter<DownloadableFile> quotaExceededReporter;
+
+    @Autowired
     private IRuntimeTenantResolver tenantResolver;
+
+    @Autowired
+    private IAuthenticationResolver authResolver;
 
     @Autowired
     private StorageFlowItemHandler storageHandler;
@@ -98,20 +104,132 @@ public class FileReferenceController {
      * End-point to Download a file referenced by a storage location with the given checksum.
      * @param checksum checksum of the file to download
      * @return {@link InputStreamResource}
-     * @throws ModuleException
-     * @throws IOException
      */
     @RequestMapping(path = DOWNLOAD_PATH, method = RequestMethod.GET, produces = MediaType.ALL_VALUE)
     @ResourceAccess(description = "Download one file by checksum.", role = DefaultRole.PROJECT_ADMIN)
-    public ResponseEntity<StreamingResponseBody> downloadFile(@PathVariable("checksum") String checksum,
-            HttpServletResponse response) throws ModuleException, IOException {
-        try {
-            DownloadableFile downloadFile = downloadService.downloadFile(checksum);
+    public ResponseEntity<StreamingResponseBody> downloadFile(
+        @PathVariable("checksum") String checksum,
+        HttpServletResponse response)
+    {
+        return downloadWithQuota(checksum, response)
+            .recover(EntityOperationForbiddenException.class, t -> {
+                LOGGER.error(String.format("File %s is not downloadable for now. Try again later.", checksum));
+                LOGGER.debug(t.getMessage(), t);
+                return new ResponseEntity<>(HttpStatus.ACCEPTED);
+            }).recover(EntityNotFoundException.class, t -> {
+                LOGGER.warn(String
+                    .format("Unable to download file with checksum=%s. Cause file does not exists on any known storage location",
+                        checksum));
+                LOGGER.debug(t.getMessage(), t);
+                return new ResponseEntity<>(HttpStatus.NOT_FOUND);
+            }).recover(ModuleException.class, t -> {
+                LOGGER.error(t.getMessage(), t);
+                return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
+            }).get();
+    }
+
+    /**
+     * End-point to Download a file referenced by a storage location with the given checksum.
+     * @param checksum checksum of the file to download
+     * @return {@link InputStreamResource}
+     */
+    @RequestMapping(path = FileDownloadService.DOWNLOAD_TOKEN_PATH, method = RequestMethod.GET,
+            produces = MediaType.ALL_VALUE)
+    @ResourceAccess(description = "Download one file by checksum.", role = DefaultRole.PUBLIC)
+    public ResponseEntity<StreamingResponseBody> downloadFileWithToken(
+        @PathVariable("checksum") String checksum,
+        @RequestParam(name = FileDownloadService.TOKEN_PARAM, required = true) String token,
+        HttpServletResponse response)
+    {
+        if (! downloadService.checkToken(checksum, token)) {
+            return new ResponseEntity<>(HttpStatus.FORBIDDEN);
+        }
+        return downloadWithQuota(checksum, response)
+            .recover(ModuleException.class, t -> {
+                LOGGER.error(t.getMessage());
+                return new ResponseEntity<>(HttpStatus.NOT_FOUND);
+            }).get();
+    }
+
+    @VisibleForTesting
+    protected Try<ResponseEntity<StreamingResponseBody>> downloadWithQuota(
+        String checksum,
+        HttpServletResponse response
+    ) {
+        return Try.of(() -> downloadService.downloadFile(checksum))
+            .mapTry(Callable::call)
+            .flatMap(dlFile -> {
+                if (dlFile instanceof FileDownloadService.QuotaLimitedDownloadableFile) {
+                    return downloadQuotaService.withQuota(
+                        authResolver.getUser(),
+                        (quotaHandler) -> Try.success((FileDownloadService.QuotaLimitedDownloadableFile) dlFile)
+                            .map(impureId(quotaHandler::start)) // map instead of peek to wrap potential errors
+                            .map(d -> wrap(d, quotaHandler))
+                            .flatMap(d -> downloadFile(d, response))
+                    ) // idempotent close of stream (and quotaHandler) if anything failed, just in case
+                    .onFailure(ignored -> Try.run(dlFile::close))
+                    .recover(DownloadLimitExceededException.class, t -> {
+                        quotaExceededReporter.report(t, dlFile, authResolver.getUser(), tenantResolver.getTenant());
+                        return new ResponseEntity<>(
+                            outputStream -> outputStream.write(t.getMessage().getBytes()),
+                            HttpStatus.TOO_MANY_REQUESTS);
+                    });
+                }
+                // no quota handling, just download
+                return downloadFile(dlFile, response);
+            });
+    }
+
+    private <T> Function<T, T> impureId(Runnable action) {
+        return x -> {
+            action.run();
+            return x;
+        };
+    }
+
+    private static class DownloadableFileWrapper extends FileDownloadService.QuotaLimitedDownloadableFile {
+
+        private final FileDownloadService.QuotaLimitedDownloadableFile dlFile;
+        private final IQuotaService.WithQuotaOperationHandler quotaHandler;
+
+        private DownloadableFileWrapper(
+            FileDownloadService.QuotaLimitedDownloadableFile dlFile,
+            IQuotaService.WithQuotaOperationHandler quotaHandler
+        ) {
+            super(dlFile.getFileInputStream(), dlFile.getRealFileSize(), dlFile.getFileName(), dlFile.getMimeType());
+            this.dlFile = dlFile;
+            this.quotaHandler = quotaHandler;
+        }
+
+        @Override
+        public void close() {
+            Try.run(quotaHandler::stop);
+            dlFile.close();
+        }
+    }
+
+    static DownloadableFileWrapper wrap(
+        FileDownloadService.QuotaLimitedDownloadableFile dlFile,
+        IQuotaService.WithQuotaOperationHandler quotaHandler
+    ) {
+        return new DownloadableFileWrapper(dlFile, quotaHandler);
+    }
+
+    @VisibleForTesting
+    protected Try<ResponseEntity<StreamingResponseBody>> downloadFile (
+        DownloadableFile downloadFile,
+        HttpServletResponse response
+    ) {
+        return Try.of(() -> {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentLength(downloadFile.getRealFileSize());
             headers.setContentType(asMediaType(downloadFile.getMimeType()));
-            headers.setContentDisposition(ContentDisposition.builder("attachment").filename(downloadFile.getFileName())
-                    .size(downloadFile.getRealFileSize()).build());
+            headers.setContentDisposition(
+                ContentDisposition.builder("attachment")
+                    .filename(downloadFile.getFileName())
+                    .size(downloadFile.getRealFileSize())
+                    .build()
+            );
             StreamingResponseBody stream = out -> {
                 try (OutputStream outs = response.getOutputStream()) {
                     byte[] bytes = new byte[1024];
@@ -119,73 +237,14 @@ public class FileReferenceController {
                     while ((length = downloadFile.getFileInputStream().read(bytes)) >= 0) {
                         outs.write(bytes, 0, length);
                     }
-                    outs.close();
                 } catch (final IOException e) {
-                    LOGGER.error("Exception while reading and streaming data {} ", e);
+                    LOGGER.error("Exception while reading and streaming data", e);
                 } finally {
                     downloadFile.close();
                 }
             };
             return new ResponseEntity<>(stream, headers, HttpStatus.OK);
-        } catch (EntityOperationForbiddenException e) {
-            LOGGER.error(String.format("File %s is not downloadable for now. Try again later.", checksum));
-            LOGGER.debug(e.getMessage(), e);
-            return new ResponseEntity<StreamingResponseBody>(HttpStatus.ACCEPTED);
-        } catch (EntityNotFoundException e) {
-            LOGGER.warn(String
-                    .format("Unable to download file with checksum=%s. Cause file does not exists on any known storage location",
-                            checksum));
-            LOGGER.debug(e.getMessage(), e);
-            return new ResponseEntity<StreamingResponseBody>(HttpStatus.NOT_FOUND);
-        } catch (ModuleException e) {
-            LOGGER.error(e.getMessage(), e);
-            return new ResponseEntity<StreamingResponseBody>(HttpStatus.INTERNAL_SERVER_ERROR);
-        }
-    }
-
-    /**
-     * End-point to Download a file referenced by a storage location with the given checksum.
-     * @param checksum checksum of the file to download
-     * @return {@link InputStreamResource}
-     * @throws ModuleException
-     * @throws IOException
-     */
-    @RequestMapping(path = FileDownloadService.DOWNLOAD_TOKEN_PATH, method = RequestMethod.GET,
-            produces = MediaType.ALL_VALUE)
-    @ResourceAccess(description = "Download one file by checksum.", role = DefaultRole.PUBLIC)
-    public ResponseEntity<StreamingResponseBody> downloadFileWithToken(@PathVariable("checksum") String checksum,
-            @RequestParam(name = FileDownloadService.TOKEN_PARAM, required = true) String token,
-            HttpServletResponse response) throws ModuleException, IOException {
-        if (downloadService.checkToken(checksum, token)) {
-            try {
-                DownloadableFile downloadFile = downloadService.downloadFile(checksum);
-                HttpHeaders headers = new HttpHeaders();
-                headers.setContentLength(downloadFile.getRealFileSize());
-                headers.setContentType(asMediaType(downloadFile.getMimeType()));
-                headers.setContentDisposition(ContentDisposition.builder("attachment")
-                        .filename(downloadFile.getFileName()).size(downloadFile.getRealFileSize()).build());
-                StreamingResponseBody stream = out -> {
-                    try (OutputStream outs = response.getOutputStream()) {
-                        byte[] bytes = new byte[1024];
-                        int length;
-                        while ((length = downloadFile.getFileInputStream().read(bytes)) >= 0) {
-                            outs.write(bytes, 0, length);
-                        }
-                        outs.close();
-                    } catch (final IOException e) {
-                        LOGGER.error("Exception while reading and streaming data {} ", e);
-                    } finally {
-                        downloadFile.close();
-                    }
-                };
-                return new ResponseEntity<>(stream, headers, HttpStatus.OK);
-            } catch (ModuleException e) {
-                LOGGER.error(e.getMessage());
-                return new ResponseEntity<>(HttpStatus.NOT_FOUND);
-            }
-        } else {
-            return new ResponseEntity<>(HttpStatus.FORBIDDEN);
-        }
+        });
     }
 
     @RequestMapping(method = RequestMethod.GET, path = EXPORT_PATH)

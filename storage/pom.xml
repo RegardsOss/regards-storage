@@ -26,9 +26,14 @@
 	<parent>
 		<groupId>fr.cnes.regards</groupId>
 		<artifactId>regards-parent</artifactId>
-		<version>1.2.1</version>
+		<version>1.4.0</version>
 		<relativePath/>
 	</parent>
+
+    <properties>
+        <vavr.version>0.10.2</vavr.version>
+        <caffeine.version>2.6.2</caffeine.version>
+    </properties>
 
     <url>https://github.com/RegardsOss/RegardsOss.github.io</url>
     <inceptionYear>2016</inceptionYear>
@@ -57,27 +62,39 @@
             <dependency>
                 <groupId>fr.cnes.regards.modules</groupId>
                 <artifactId>storage-dao</artifactId>
-                <version>1.2.1</version>
+                <version>1.4.0</version>
             </dependency>
             <dependency>
                 <groupId>fr.cnes.regards.modules</groupId>
                 <artifactId>storage-domain</artifactId>
-                <version>1.2.1</version>
+                <version>1.4.0</version>
             </dependency>
             <dependency>
                 <groupId>fr.cnes.regards.modules</groupId>
                 <artifactId>storage-rest</artifactId>
-                <version>1.2.1</version>
+                <version>1.4.0</version>
             </dependency>
             <dependency>
                 <groupId>fr.cnes.regards.modules</groupId>
                 <artifactId>storage-service</artifactId>
-                <version>1.2.1</version>
+                <version>1.4.0</version>
             </dependency>
             <dependency>
                 <groupId>fr.cnes.regards.modules</groupId>
                 <artifactId>storage-client</artifactId>
-                <version>1.2.1</version>
+                <version>1.4.0</version>
+            </dependency>
+
+            <!-- Libraries -->
+            <dependency>
+                <groupId>io.vavr</groupId>
+                <artifactId>vavr</artifactId>
+                <version>${vavr.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.ben-manes.caffeine</groupId>
+                <artifactId>caffeine</artifactId>
+                <version>${caffeine.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
